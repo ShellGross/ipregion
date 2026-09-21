@@ -216,7 +216,7 @@ parse_args() {
       -h|--help) usage; exit 0 ;;
       -v|--verbose) VERBOSE=true; shift ;;
       -j|--json) JSON_OUTPUT=true; shift ;;
-      --html) HTML_OUTPUT=true; shift ;;
+      --html|--HTML|-html|html) HTML_OUTPUT=true; shift ;;
       -g|--group)
         GROUPS_TO_SHOW="$2"
         [[ "$GROUPS_TO_SHOW" =~ ^(primary|custom|cdn|ru|all)$ ]] || die "bad group: $2"
@@ -241,7 +241,8 @@ parse_args() {
         [[ "$2" =~ ^[0-9]+$ && "$2" -ge 1 ]] || die "bad jobs: $2"
         MAX_JOBS="$2"; shift 2 ;;
       --no-color) NO_COLOR=1; FORCE_COLOR=0; shift ;;
-      *) die "unknown option: $1" ;;
+      *)
+        die "unknown option: $1 (use --help). HTML: --html" ;;
     esac
   done
 }
@@ -1553,7 +1554,7 @@ html_esc() {
 
 html_badge_class() {
   local v="$1" base target
-  [[ -z "$v" ]] && { echo "mute"; return; }
+  [[ -z "$v" || "$v" == "-" ]] && { echo "mute"; return; }
   case "$v" in
     Yes|Orig) echo "ok"; return ;;
     No|Proxy) echo "warn"; return ;;

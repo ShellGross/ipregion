@@ -3,7 +3,15 @@
 # Fork of Davoyan/ipregion (upstream vernette/ipregion)
 # Node-oriented IP region checker.
 set -o pipefail
-export LC_ALL=C
+if locale -a 2>/dev/null | grep -qiE '^(C\.UTF-8|en_US.utf8|C.utf8)$'; then
+  export LC_ALL="$(locale -a 2>/dev/null | grep -iE '^(C\.UTF-8|C.utf8)$' | head -n1)"
+  [[ -z "$LC_ALL" ]] && export LC_ALL=C.UTF-8
+else
+  export LC_ALL=C
+fi
+export LANG="${LC_ALL}"
+NO_COLOR="${NO_COLOR:-}"
+FORCE_COLOR="${FORCE_COLOR:-1}"
 
 SCRIPT_NAME="ipregion-berkut"
 SCRIPT_SRC="fork of Davoyan/ipregion"
@@ -128,9 +136,16 @@ na_or() {
   fi
 }
 
+use_color() {
+  [[ "$JSON_OUTPUT" == true ]] && return 1
+  [[ -n "$NO_COLOR" ]] && return 1
+  [[ "$FORCE_COLOR" == "0" ]] && return 1
+  return 0
+}
+
 color() {
   local n="$1" t="$2"
-  if [[ "$JSON_OUTPUT" == true || ! -t 1 ]]; then
+  if ! use_color; then
     printf "%s" "$t"
     return
   fi
@@ -143,9 +158,19 @@ color() {
     RED) c="1;31" ;;
     DIM) c="0;90" ;;
     WHT) c="1;97" ;;
-    BLU) c="0;34" ;;
+    BLU) c="1;34" ;;
+    MAG) c="1;35" ;;
+    INV) c="1;37;44" ;;
   esac
   printf "\033[%sm%s\033[0m" "$c" "$t"
+}
+
+hr() {
+  color DIM "--------------------------------"
+}
+
+section_title() {
+  printf "\n%s\n" "$(color CYAN "[ $1 ]")"
 }
 
 die() {
@@ -160,7 +185,7 @@ log() {
 
 usage() {
   cat <<EOF
-$SCRIPT_NAME â $SCRIPT_SRC
+$SCRIPT_NAME - $SCRIPT_SRC
 
 Usage: $0 [options]
 
@@ -177,6 +202,7 @@ Usage: $0 [options]
   -e, --expect CC       expected country
       --full            show full IP
       --jobs N          parallel jobs (default $MAX_JOBS)
+      --no-color        disable ANSI colors
 
 Exit: 0 ok, 1 expect miss, 2 fatal
 EOF
@@ -211,6 +237,7 @@ parse_args() {
       --jobs)
         [[ "$2" =~ ^[0-9]+$ && "$2" -ge 1 ]] || die "bad jobs: $2"
         MAX_JOBS="$2"; shift 2 ;;
+      --no-color) NO_COLOR=1; FORCE_COLOR=0; shift ;;
       *) die "unknown option: $1" ;;
     esac
   done
@@ -1258,94 +1285,117 @@ legend_lines() {
 print_kv() {
   local k="$1" v="$2" ck="${3:-CYAN}" cv="${4:-WHT}"
   [[ -z "$v" ]] && return
-  printf "%s %s\n" "$(color "$ck" "$k")" "$(color "$cv" "$v")"
+  printf " %s %-6s %s\n" "$(color DIM "|")" "$(color "$ck" "$k")" "$(color "$cv" "$v")"
+}
+
+val_base_cc() {
+  local v="$1" base
+  [[ -z "$v" || "$v" == "-" ]] && { echo ""; return; }
+  if [[ "$v" == DC*/* ]]; then
+    echo "${v##*/}"
+    return
+  fi
+  base="${v%%/*}"
+  if [[ "$base" =~ ^[A-Z]{2}$ ]]; then
+    echo "$base"
+  else
+    echo ""
+  fi
 }
 
 fmt_val() {
   local v="$1"
-  [[ -z "$v" ]] && v="â"
-  if [[ -n "$EXPECT_CC" && "$v" =~ ^[A-Z]{2} && "$v" != "$EXPECT_CC" && "$v" != Yes && "$v" != No ]]; then
-    local base="${v%%/*}"
-    if [[ "$base" =~ ^[A-Z]{2}$ && "$base" != "$EXPECT_CC" ]]; then
-      color RED "$v"
-      return
-    fi
+  [[ -z "$v" ]] && v="-"
+  local base target
+  base="$(val_base_cc "$v")"
+  target="${EXPECT_CC:-$CONSENSUS_CC}"
+  if [[ -n "$base" && -n "$target" && "$base" != "$target" ]]; then
+    color YEL "$v"
+    return
   fi
   case "$v" in
     Yes|Orig) color BGRN "$v" ;;
     No|Proxy) color YEL "$v" ;;
-    â) color DIM "$v" ;;
-    *) color WHT "$v" ;;
+    -) color DIM "$v" ;;
+    *)
+      if [[ -n "$base" && "$base" == "$target" ]]; then
+        color BGRN "$v"
+      else
+        color WHT "$v"
+      fi
+      ;;
   esac
 }
 
 print_section() {
   local title="$1" group="$2"
-  local have=0
-  awk -F '\t' -v g="$group" '$1==g{c++} END{print c+0}' "$WORKDIR/rows.tsv" | grep -q '[1-9]' || return
-  printf "\n%s\n" "$(color DIM "ââ $title")"
+  awk -F '\t' -v g="$group" '$1==g{c++} END{exit !(c>0)}' "$WORKDIR/rows.tsv" || return
+  section_title "$title"
   awk -F '\t' -v g="$group" '$1==g {print}' "$WORKDIR/rows.tsv" | while IFS=$'\t' read -r _ name v4 v6; do
     local val="$v4"
     want_v4 || val="$v6"
     if want_v4 && want_v6; then
-      [[ -z "$v4" ]] && v4="â"
-      [[ -z "$v6" ]] && v6="â"
-      printf "%-14s %s\n" "$name" "$(fmt_val "$v4")/$(fmt_val "$v6")"
+      [[ -z "$v4" ]] && v4="-"
+      [[ -z "$v6" ]] && v6="-"
+      printf " %-13s %s\n" "$(color WHT "$name")" "$(fmt_val "$v4") $(color DIM "/") $(fmt_val "$v6")"
     else
-      [[ -z "$val" ]] && val="â"
-      printf "%-14s %s\n" "$name" "$(fmt_val "$val")"
+      [[ -z "$val" ]] && val="-"
+      printf " %-13s %s\n" "$(color WHT "$name")" "$(fmt_val "$val")"
     fi
   done
 }
 
 print_mismatch() {
-  [[ -n "$EXPECT_CC" ]] || return
-  local found=0 line
-  printf "\n%s\n" "$(color DIM "ââ mismatch")"
+  local target="${EXPECT_CC:-$CONSENSUS_CC}"
+  [[ -n "$target" ]] || return
+  local found=0
+  local lines=""
   while IFS=$'\t' read -r grp name v4 v6; do
     local v="$v4"
     want_v4 || v="$v6"
-    local base="${v%%/*}"
-    if [[ "$v" == DC*/* ]]; then
-      base="${v##*/}"
-    fi
-    if [[ "$base" =~ ^[A-Z]{2}$ && "$base" != "$EXPECT_CC" ]]; then
-      printf "%-14s %s\n" "$name" "$(color RED "$v")"
+    local base
+    base="$(val_base_cc "$v")"
+    if [[ -n "$base" && "$base" != "$target" ]]; then
+      lines+="$(printf " %-13s %s" "$name" "$(color YEL "$v")")"$'\n'
       found=1
     fi
   done <"$WORKDIR/rows.tsv"
-  if [[ "$found" -eq 0 ]]; then
-    printf "%s\n" "$(color BGRN "none")"
-  fi
+  [[ "$found" -eq 1 ]] || return
+  section_title "DIFF vs ${target}"
+  printf "%s" "$lines"
 }
 
 print_human() {
-  local ip asnline flags cities expect_line
+  local ip flags cf geo_line fl_col
   if want_v4; then
     ip="$(mask_ip "$EXTERNAL_IPV4")"
   else
     ip="$(mask_ip "$EXTERNAL_IPV6")"
   fi
+
   printf "%s\n" "$(color CYAN "$SCRIPT_NAME")"
   printf "%s\n" "$(color DIM "$SCRIPT_SRC")"
-  printf "\n"
-  print_kv "IP  " "$ip"
+  printf "%s\n" "$(hr)"
+
+  print_kv "IP" "$ip"
   if want_v4 && want_v6; then
-    print_kv "v6  " "$(mask_ip "$EXTERNAL_IPV6")"
+    print_kv "IPv6" "$(mask_ip "$EXTERNAL_IPV6")"
   fi
   if [[ -n "$ASN" ]]; then
-    asnline="AS${ASN}"
-    [[ -n "$ASN_NAME" ]] && asnline="$asnline $ASN_NAME"
-    # wrap long org
-    if [[ ${#asnline} -gt 34 ]]; then
-      print_kv "ASN " "AS${ASN}"
-      print_kv "org " "$ASN_NAME"
+    print_kv "ASN" "AS${ASN}"
+  fi
+  if [[ -n "$ASN_NAME" ]]; then
+    local org="$ASN_NAME"
+    if [[ ${#org} -gt 22 ]]; then
+      print_kv "org" "${org:0:22}"
+      print_kv "" "${org:22}"
     else
-      print_kv "ASN " "$asnline"
+      print_kv "org" "$org"
     fi
   fi
-  print_kv "PTR " "$PTR"
+  print_kv "PTR" "$PTR"
   print_kv "RDAP" "${RDAP_ORG:+$RDAP_ORG }${RDAP_CC}"
+
   flags=""
   [[ "$FLAG_HOSTING" == yes ]] && flags+="hosting "
   [[ "$FLAG_VPN" == yes ]] && flags+="vpn "
@@ -1353,40 +1403,50 @@ print_human() {
   [[ "$FLAG_ANYCAST" == yes ]] && flags+="anycast "
   [[ "$FLAG_MOBILE" == yes ]] && flags+="mobile "
   flags="${flags%% }"
-  [[ -z "$flags" ]] && flags="clear"
-  print_kv "flg " "$flags" CYAN YEL
-  local cf="â"
+  fl_col=YEL
+  if [[ -z "$flags" ]]; then
+    flags="clear"
+    fl_col=BGRN
+  fi
+  print_kv "flags" "$flags" CYAN "$fl_col"
+
+  cf=""
   if [[ -n "$CF_LOC" || -n "$CF_COLO" ]]; then
-    cf="${CF_LOC:-?} ${CF_COLO:+colo $CF_COLO}"
+    cf="${CF_LOC:-?}"
+    [[ -n "$CF_COLO" ]] && cf="$cf colo=$CF_COLO"
     [[ -n "$CF_WARP" && "$CF_WARP" != "off" ]] && cf="$cf warp=$CF_WARP"
   fi
-  print_kv "CF  " "$cf"
-  [[ -n "$CITY_IPINFO" ]] && print_kv "city" "ipinfo $CITY_IPINFO"
-  [[ -n "$CITY_MAXMIND" ]] && print_kv "city" "maxmind $CITY_MAXMIND"
-  [[ -n "$CITY_2IP" ]] && print_kv "city" "2ip $CITY_2IP"
-  [[ -n "$CITY_SYPEX" ]] && print_kv "city" "sypex $CITY_SYPEX"
+  print_kv "CF" "$cf"
 
+  [[ -n "$CITY_IPINFO" ]] && print_kv "city" "$CITY_IPINFO"
+  [[ -n "$CITY_MAXMIND" ]] && print_kv "mm" "$CITY_MAXMIND"
+  [[ -n "$CITY_2IP" ]] && print_kv "2ip" "$CITY_2IP"
+  [[ -n "$CITY_SYPEX" ]] && print_kv "sx" "$CITY_SYPEX"
+
+  printf "%s\n" "$(hr)"
   if [[ -n "$CONSENSUS_CC" ]]; then
-    print_kv "sum " "$CONSENSUS_CC $CONSENSUS_PCT%  $(cc_name "$CONSENSUS_CC")" CYAN BGRN
+    geo_line="$CONSENSUS_CC  ${CONSENSUS_PCT}%  $(cc_name "$CONSENSUS_CC")"
+    printf " %s %s\n" "$(color CYAN "GEO")" "$(color BGRN "$geo_line")"
   fi
   if [[ -n "$EXPECT_CC" ]]; then
     if [[ "$CONSENSUS_CC" == "$EXPECT_CC" ]]; then
-      print_kv "exp " "$EXPECT_CC OK" CYAN BGRN
+      printf " %s %s\n" "$(color CYAN "EXP")" "$(color BGRN "$EXPECT_CC  OK")"
     else
-      print_kv "exp " "$EXPECT_CC FAIL (got ${CONSENSUS_CC:-?})" CYAN RED
+      printf " %s %s\n" "$(color CYAN "EXP")" "$(color RED "$EXPECT_CC  FAIL  got ${CONSENSUS_CC:-?}")"
     fi
   fi
+  printf "%s\n" "$(hr)"
 
   case "$GROUPS_TO_SHOW" in
-    custom) print_section "services" custom ;;
-    primary) print_section "geoip" primary ;;
-    cdn) print_section "cdn" cdn ;;
-    ru) print_section "ru" ru ;;
+    custom) print_section "SERVICES" custom ;;
+    primary) print_section "GEOIP" primary ;;
+    cdn) print_section "CDN" cdn ;;
+    ru) print_section "RU" ru ;;
     *)
-      print_section "services" custom
-      print_section "ru" ru
-      print_section "geoip" primary
-      print_section "cdn" cdn
+      print_section "SERVICES" custom
+      print_section "RU" ru
+      print_section "GEOIP" primary
+      print_section "CDN" cdn
       ;;
   esac
 
@@ -1395,13 +1455,15 @@ print_human() {
   local leg
   leg="$(legend_lines)"
   if [[ -n "$leg" ]]; then
-    printf "\n%s\n" "$(color DIM "ââ legend")"
+    section_title "LEGEND"
     while IFS=$'\t' read -r _ cc pct; do
       [[ -z "$cc" ]] && continue
-      printf "%-4s %-16s %s\n" "$cc" "$(cc_name "$cc")" "${pct}%"
+      local mark=" "
+      [[ "$cc" == "$CONSENSUS_CC" ]] && mark="*"
+      printf " %s%-3s %-14s %s\n" "$(color DIM "$mark")" "$(color WHT "$cc")" "$(cc_name "$cc")" "$(color DIM "${pct}%")"
     done <<<"$leg"
   fi
-  printf "\n"
+  printf "\n%s\n" "$(color DIM "green = GEO, yellow = other")"
 }
 
 print_json() {

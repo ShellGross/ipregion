@@ -21,6 +21,7 @@ SPOTIFY_CLIENT_ID="9a8d2f0ce77a4e248bb71fefcb557637"
 
 VERBOSE=false
 JSON_OUTPUT=false
+HTML_OUTPUT=false
 GROUPS_TO_SHOW="all"
 CURL_TIMEOUT=6
 CURL_RETRIES=1
@@ -137,7 +138,7 @@ na_or() {
 }
 
 use_color() {
-  [[ "$JSON_OUTPUT" == true ]] && return 1
+  [[ "$JSON_OUTPUT" == true || "$HTML_OUTPUT" == true ]] && return 1
   [[ -n "$NO_COLOR" ]] && return 1
   [[ "$FORCE_COLOR" == "0" ]] && return 1
   return 0
@@ -192,6 +193,7 @@ Usage: $0 [options]
   -h, --help
   -v, --verbose
   -j, --json
+      --html              HTML tables + CSS
   -g, --group GROUP     primary|custom|cdn|ru|all
   -t, --timeout SEC     default $CURL_TIMEOUT
   -4, --ipv4
@@ -214,6 +216,7 @@ parse_args() {
       -h|--help) usage; exit 0 ;;
       -v|--verbose) VERBOSE=true; shift ;;
       -j|--json) JSON_OUTPUT=true; shift ;;
+      --html) HTML_OUTPUT=true; shift ;;
       -g|--group)
         GROUPS_TO_SHOW="$2"
         [[ "$GROUPS_TO_SHOW" =~ ^(primary|custom|cdn|ru|all)$ ]] || die "bad group: $2"
@@ -1139,7 +1142,7 @@ wait_jobs() {
 }
 
 spinner_start() {
-  [[ "$JSON_OUTPUT" == true || "$VERBOSE" == true ]] && return
+  [[ "$JSON_OUTPUT" == true || "$HTML_OUTPUT" == true || "$VERBOSE" == true ]] && return
   [[ -t 1 ]] || return
   SPINNER_RUNNING=true
   (
@@ -1544,6 +1547,202 @@ print_json() {
     }'
 }
 
+html_esc() {
+  printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+}
+
+html_badge_class() {
+  local v="$1" base target
+  [[ -z "$v" ]] && { echo "mute"; return; }
+  case "$v" in
+    Yes|Orig) echo "ok"; return ;;
+    No|Proxy) echo "warn"; return ;;
+  esac
+  base="$(val_base_cc "$v")"
+  target="${EXPECT_CC:-$CONSENSUS_CC}"
+  if [[ -n "$base" && -n "$target" && "$base" != "$target" ]]; then
+    echo "diff"
+  elif [[ -n "$base" && "$base" == "$target" ]]; then
+    echo "ok"
+  else
+    echo "val"
+  fi
+}
+
+html_td() {
+  local v="$1" cls
+  [[ -z "$v" ]] && v="-"
+  cls="$(html_badge_class "$v")"
+  printf '<td><span class="b %s">%s</span></td>' "$cls" "$(html_esc "$v")"
+}
+
+html_table_group() {
+  local title="$1" group="$2"
+  awk -F '\t' -v g="$group" '$1==g{c++} END{exit !(c>0)}' "$WORKDIR/rows.tsv" || return
+  local dual=0
+  want_v4 && want_v6 && dual=1
+  printf '<section><h2>%s</h2><div class="wrap"><table>' "$(html_esc "$title")"
+  printf '<thead><tr><th>Service</th>'
+  if [[ "$dual" -eq 1 ]]; then
+    printf '<th>IPv4</th><th>IPv6</th>'
+  else
+    printf '<th>Result</th>'
+  fi
+  printf '</tr></thead><tbody>\n'
+  awk -F '\t' -v g="$group" '$1==g {print}' "$WORKDIR/rows.tsv" | while IFS=$'\t' read -r _ name v4 v6; do
+    printf '<tr><th>%s</th>' "$(html_esc "$name")"
+    if [[ "$dual" -eq 1 ]]; then
+      html_td "$v4"
+      html_td "$v6"
+    else
+      if want_v4; then html_td "$v4"; else html_td "$v6"; fi
+    fi
+    printf '</tr>\n'
+  done
+  printf '</tbody></table></div></section>\n'
+}
+
+print_html() {
+  local ip flags cf geo_cls exp_cls
+  if want_v4; then ip="$(mask_ip "$EXTERNAL_IPV4")"; else ip="$(mask_ip "$EXTERNAL_IPV6")"; fi
+  flags=""
+  [[ "$FLAG_HOSTING" == yes ]] && flags+="hosting "
+  [[ "$FLAG_VPN" == yes ]] && flags+="vpn "
+  [[ "$FLAG_PROXY" == yes ]] && flags+="proxy "
+  [[ "$FLAG_ANYCAST" == yes ]] && flags+="anycast "
+  [[ "$FLAG_MOBILE" == yes ]] && flags+="mobile "
+  flags="${flags%% }"
+  [[ -z "$flags" ]] && flags="clear"
+  cf=""
+  if [[ -n "$CF_LOC" || -n "$CF_COLO" ]]; then
+    cf="${CF_LOC:-?}"
+    [[ -n "$CF_COLO" ]] && cf="$cf colo=$CF_COLO"
+    [[ -n "$CF_WARP" && "$CF_WARP" != "off" ]] && cf="$cf warp=$CF_WARP"
+  fi
+  geo_cls="ok"
+  exp_cls="ok"
+  [[ -n "$EXPECT_CC" && "$CONSENSUS_CC" != "$EXPECT_CC" ]] && exp_cls="diff"
+
+  cat <<EOF
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${SCRIPT_NAME}</title>
+<style>
+:root{
+  --bg:#0e1116;--card:#171c24;--line:#2a3340;--tx:#e8edf4;--dim:#8b97a8;
+  --ok:#3dd68c;--okbg:#123526;--warn:#f5c84c;--warnbg:#3a3010;
+  --diff:#ff8b6b;--diffbg:#3a1c16;--acc:#6ec3ff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);
+  font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.page{max-width:640px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:0 0 4px;color:var(--acc)}
+.sub{color:var(--dim);font-size:12px;margin-bottom:16px}
+h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--dim);margin:20px 0 8px}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.card{background:var(--card);border:1px solid var(--line);
+  border-radius:10px;padding:10px 12px}
+.card b{display:block;color:var(--dim);font-size:11px;
+  font-weight:600;text-transform:uppercase;margin-bottom:4px}
+.card span{word-break:break-word}
+.geo{grid-column:1/-1;display:flex;align-items:center;gap:10px}
+.geo .big{font-size:28px;font-weight:700;color:var(--ok)}
+.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;
+  background:var(--card)}
+table{width:100%;border-collapse:collapse;min-width:280px}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}
+thead th{font-size:11px;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.06em;background:#12171e}
+tbody th{font-weight:600;width:42%}
+tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}
+.b{display:inline-block;min-width:2.4em;padding:2px 8px;border-radius:999px;
+  font-weight:700;font-size:12px}
+.b.ok{background:var(--okbg);color:var(--ok)}
+.b.warn{background:var(--warnbg);color:var(--warn)}
+.b.diff{background:var(--diffbg);color:var(--diff)}
+.b.val{background:#223044;color:var(--tx)}
+.b.mute{background:#1b212a;color:var(--dim)}
+.legend{display:flex;flex-wrap:wrap;gap:6px}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:999px;
+  padding:4px 10px;font-size:12px}
+.chip em{color:var(--dim);font-style:normal;margin-left:6px}
+.foot{margin-top:18px;color:var(--dim);font-size:11px}
+@media(max-width:420px){
+  .cards{grid-template-columns:1fr}
+  body{font-size:13px}
+}
+</style>
+</head>
+<body>
+<div class="page">
+<h1>$(html_esc "$SCRIPT_NAME")</h1>
+<div class="sub">$(html_esc "$SCRIPT_SRC")</div>
+<div class="cards">
+<div class="card geo">
+  <div>
+    <b>GEO</b>
+    <div class="big">$(html_esc "${CONSENSUS_CC:-?}")</div>
+  </div>
+  <div>
+    <b>consensus</b>
+    <span>$(html_esc "${CONSENSUS_PCT:-0}% $(cc_name "$CONSENSUS_CC")")</span>
+EOF
+  if [[ -n "$EXPECT_CC" ]]; then
+    printf '<div style="margin-top:6px"><b>expect</b> <span class="b %s">%s</span></div>\n' \
+      "$exp_cls" "$(html_esc "$EXPECT_CC")"
+  fi
+  cat <<EOF
+  </div>
+</div>
+<div class="card"><b>IP</b><span>$(html_esc "$ip")</span></div>
+<div class="card"><b>ASN</b><span>$(html_esc "${ASN:+AS$ASN}")</span></div>
+<div class="card"><b>org</b><span>$(html_esc "$ASN_NAME")</span></div>
+<div class="card"><b>flags</b><span>$(html_esc "$flags")</span></div>
+<div class="card"><b>PTR</b><span>$(html_esc "$PTR")</span></div>
+<div class="card"><b>RDAP</b><span>$(html_esc "${RDAP_ORG:+$RDAP_ORG }${RDAP_CC}")</span></div>
+<div class="card"><b>CF</b><span>$(html_esc "$cf")</span></div>
+<div class="card"><b>city</b><span>$(html_esc "${CITY_MAXMIND:-$CITY_IPINFO}")</span></div>
+</div>
+EOF
+
+  case "$GROUPS_TO_SHOW" in
+    custom) html_table_group "Services" custom ;;
+    primary) html_table_group "GeoIP" primary ;;
+    cdn) html_table_group "CDN" cdn ;;
+    ru) html_table_group "RU" ru ;;
+    *)
+      html_table_group "Services" custom
+      html_table_group "RU" ru
+      html_table_group "GeoIP" primary
+      html_table_group "CDN" cdn
+      ;;
+  esac
+
+  local leg
+  leg="$(legend_lines)"
+  if [[ -n "$leg" ]]; then
+    printf '<section><h2>Legend</h2><div class="legend">\n'
+    while IFS=$'\t' read -r _ cc pct; do
+      [[ -z "$cc" ]] && continue
+      printf '<span class="chip"><b>%s</b> %s<em>%s%%</em></span>\n' \
+        "$(html_esc "$cc")" "$(html_esc "$(cc_name "$cc")")" "$(html_esc "$pct")"
+    done <<<"$leg"
+    printf '</div></section>\n'
+  fi
+
+  cat <<EOF
+<p class="foot">green = GEO match, yellow = other / blocked</p>
+</div>
+</body>
+</html>
+EOF
+}
+
 main() {
   parse_args "$@"
   need_cmds
@@ -1576,6 +1775,8 @@ main() {
 
   if [[ "$JSON_OUTPUT" == true ]]; then
     print_json
+  elif [[ "$HTML_OUTPUT" == true ]]; then
+    print_html
   else
     print_human
   fi

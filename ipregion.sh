@@ -3,13 +3,10 @@
 # Fork of Davoyan/ipregion (upstream vernette/ipregion)
 # Node-oriented IP region checker.
 set -o pipefail
-if locale -a 2>/dev/null | grep -qiE '^(C\.UTF-8|en_US.utf8|C.utf8)$'; then
-  export LC_ALL="$(locale -a 2>/dev/null | grep -iE '^(C\.UTF-8|C.utf8)$' | head -n1)"
-  [[ -z "$LC_ALL" ]] && export LC_ALL=C.UTF-8
-else
-  export LC_ALL=C
-fi
-export LANG="${LC_ALL}"
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+export LC_CTYPE=C.UTF-8
+export PYTHONIOENCODING=utf-8
 NO_COLOR="${NO_COLOR:-}"
 FORCE_COLOR="${FORCE_COLOR:-1}"
 
@@ -152,7 +149,7 @@ color() {
   # bench.sh / yabs palette: 8-color, no bold, no 90/97
   local c="0"
   case "$n" in
-    CYAN) c="36" ;;
+    CYAN) c="34" ;;
     GRN|BGRN) c="32" ;;
     YEL) c="33" ;;
     RED) c="31" ;;
@@ -170,7 +167,7 @@ hr() {
 }
 
 section_title() {
-  printf "\n%s\n%s\n" "$(color BLU "$1")" "$(color CYAN "--------------------------------")"
+  printf "\n%s\n%s\n" "$(color BLU "$1")" "$(color DIM "--------------------------------")"
 }
 
 die() {
@@ -798,7 +795,7 @@ lk_netflix() {
 lk_netflix_lib() {
   local ver="$1"
   local a b
-  # 80018499 â widely licensed; 70143836 â US original probe
+  # 80018499 — widely licensed; 70143836 — US original probe
   a="$(req_code GET "https://www.netflix.com/title/80018499" "$ver")"
   b="$(req_code GET "https://www.netflix.com/title/70143836" "$ver")"
   if [[ "$a" == 404 && "$b" == 404 ]]; then
@@ -1076,7 +1073,7 @@ lk_ivi() {
   local ver="$1" body
   body="$(req GET "https://www.ivi.ru" "$ver")"
   if [[ -z "$body" ]]; then echo ""; return; fi
-  if grep -qiE "Ð½ÐµÐ´Ð¾ÑÑÑÐ¿ÐµÐ½|not available|restricted" <<<"$body"; then
+  if grep -qiE "недоступен|not available|restricted" <<<"$body"; then
     echo "No"
   else
     echo "Yes"
@@ -1148,7 +1145,7 @@ spinner_start() {
     while [[ -f "$WORKDIR/spin" || "$SPINNER_RUNNING" == true ]]; do
       cur=""
       [[ -f "$WORKDIR/spin" ]] && cur="$(cat "$WORKDIR/spin" 2>/dev/null)"
-      printf "\r\033[K%s %s" "$(color CYAN "${s:i++%4:1}")" "$(color DIM "$cur")"
+      printf "\r\033[K%s %s" "$(color BLU "${s:i++%4:1}")" "$(color DIM "$cur")"
       sleep 0.08
     done
   ) &
@@ -1286,7 +1283,7 @@ legend_lines() {
 print_kv() {
   local k="$1" v="$2" cv="${3:-WHT}"
   [[ -z "$v" ]] && return
-  printf "%s %s %s\n" "$(color CYAN "$(printf '%-18s' "$k")")" "$(color WHT ":")" "$(color "$cv" "$v")"
+  printf "%s %s %s\n" "$(color BLU "$(printf '%-18s' "$k")")" "$(color WHT ":")" "$(color "$cv" "$v")"
 }
 
 val_base_cc() {
@@ -1338,7 +1335,7 @@ print_section() {
   local title="$1" group="$2"
   awk -F '\t' -v g="$group" '$1==g{c++} END{exit !(c>0)}' "$WORKDIR/rows.tsv" || return
   section_title "$title"
-  printf "%s\n" "$(color DIM "$(printf '%-18s   %s' "Service" "Country")")"
+  printf "%s\n" "$(color DIM "$(printf '%-18s   %s' "Сервис" "Страна")")"
   awk -F '\t' -v g="$group" '$1==g {print}' "$WORKDIR/rows.tsv" | while IFS=$'\t' read -r _ name v4 v6; do
     local val="$v4"
     want_v4 || val="$v6"
@@ -1355,21 +1352,21 @@ print_section() {
 print_mismatch() {
   local target="${EXPECT_CC:-$CONSENSUS_CC}"
   [[ -n "$target" ]] || return
-  local found=0
-  local lines=""
+  local found=0 tmp
+  tmp="$(mktemp "$WORKDIR/diff.XXXX")"
   while IFS=$'\t' read -r grp name v4 v6; do
     local v="$v4"
     want_v4 || v="$v6"
     local base
     base="$(val_base_cc "$v")"
     if [[ -n "$base" && "$base" != "$target" ]]; then
-      lines+="$(printf "%-18s   %s\n" "$name" "$(color YEL "$v")")"
+      printf "%-18s   %s\n" "$name" "$(color YEL "$v")" >>"$tmp"
       found=1
     fi
   done <"$WORKDIR/rows.tsv"
   [[ "$found" -eq 1 ]] || return
-  section_title "Mismatch vs ${target}"
-  printf "%s" "$lines"
+  section_title "Не совпало с ${target}"
+  cat "$tmp"
 }
 
 print_human() {
@@ -1381,19 +1378,19 @@ print_human() {
   fi
 
   printf "%s\n" "$(hr)"
-  printf "%s\n" "$(color CYAN "         ipregion-berkut")"
+  printf "%s\n" "$(color BLU "         ipregion-berkut")"
   printf "%s\n" "$(color DIM "      fork of Davoyan/ipregion")"
   printf "%s\n" "$(hr)"
 
-  section_title "Network"
+  section_title "Сеть"
   print_kv "IPv4" "$ip"
   if want_v4 && want_v6; then
     print_kv "IPv6" "$(mask_ip "$EXTERNAL_IPV6")"
   fi
   [[ -n "$ASN" ]] && print_kv "ASN" "AS${ASN}"
-  [[ -n "$ASN_NAME" ]] && print_kv "Organization" "$ASN_NAME"
-  print_kv "Hostname PTR" "$PTR"
-  print_kv "RDAP registry" "${RDAP_ORG:+$RDAP_ORG / }${RDAP_CC}"
+  [[ -n "$ASN_NAME" ]] && print_kv "Организация" "$ASN_NAME"
+  print_kv "Имя PTR" "$PTR"
+  print_kv "Реестр RDAP" "${RDAP_ORG:+$RDAP_ORG / }${RDAP_CC}"
 
   flags=""
   [[ "$FLAG_HOSTING" == yes ]] && flags+="hosting "
@@ -1407,7 +1404,7 @@ print_human() {
     flags="residential"
     fl_col=BGRN
   fi
-  print_kv "Address type" "$flags" "$fl_col"
+  print_kv "Тип адреса" "$flags" "$fl_col"
 
   cf=""
   if [[ -n "$CF_LOC" || -n "$CF_COLO" ]]; then
@@ -1417,35 +1414,35 @@ print_human() {
   fi
   print_kv "Cloudflare" "$cf"
 
-  section_title "City lookups"
-  print_kv "MaxMind city" "$CITY_MAXMIND"
-  print_kv "IPinfo city" "$CITY_IPINFO"
-  print_kv "2ip city" "$CITY_2IP"
-  print_kv "Sypex city" "$CITY_SYPEX"
+  section_title "Город"
+  print_kv "MaxMind" "$CITY_MAXMIND"
+  print_kv "IPinfo" "$CITY_IPINFO"
+  print_kv "2ip" "$CITY_2IP"
+  print_kv "Sypex" "$CITY_SYPEX"
 
-  section_title "Consensus"
+  section_title "Итог"
   if [[ -n "$CONSENSUS_CC" ]]; then
-    print_kv "Country" "$CONSENSUS_CC  $(cc_name "$CONSENSUS_CC")" BGRN
-    print_kv "Match" "${CONSENSUS_PCT}%" BGRN
+    print_kv "Страна" "$CONSENSUS_CC  $(cc_name "$CONSENSUS_CC")" BGRN
+    print_kv "Совпадение" "${CONSENSUS_PCT}%" BGRN
   fi
   if [[ -n "$EXPECT_CC" ]]; then
     if [[ "$CONSENSUS_CC" == "$EXPECT_CC" ]]; then
-      print_kv "Expected" "$EXPECT_CC  OK" BGRN
+      print_kv "Ожидали" "$EXPECT_CC  OK" BGRN
     else
-      print_kv "Expected" "$EXPECT_CC  FAIL (got ${CONSENSUS_CC:-?})" RED
+      print_kv "Ожидали" "$EXPECT_CC  FAIL (${CONSENSUS_CC:-?})" RED
     fi
   fi
 
   case "$GROUPS_TO_SHOW" in
-    custom) print_section "Streaming / apps" custom ;;
-    primary) print_section "GeoIP databases" primary ;;
-    cdn) print_section "CDN edge" cdn ;;
-    ru) print_section "RU services" ru ;;
+    custom) print_section "Сервисы" custom ;;
+    primary) print_section "GeoIP" primary ;;
+    cdn) print_section "CDN" cdn ;;
+    ru) print_section "RU сервисы" ru ;;
     *)
-      print_section "Streaming / apps" custom
-      print_section "RU services" ru
-      print_section "GeoIP databases" primary
-      print_section "CDN edge" cdn
+      print_section "Сервисы" custom
+      print_section "RU сервисы" ru
+      print_section "GeoIP" primary
+      print_section "CDN" cdn
       ;;
   esac
 
@@ -1454,16 +1451,20 @@ print_human() {
   local leg
   leg="$(legend_lines)"
   if [[ -n "$leg" ]]; then
-    section_title "Legend"
-    printf "%s\n" "$(color DIM "$(printf '%-6s %-14s %s' "Code" "Country" "%")")"
+    section_title "Легенда"
+    printf "%s\n" "$(color DIM "$(printf '%-6s %-14s %s' "Код" "Страна" "%")")"
     while IFS=$'\t' read -r _ cc pct; do
       [[ -z "$cc" ]] && continue
       local mark=" "
       [[ "$cc" == "$CONSENSUS_CC" ]] && mark="*"
-      printf "%s%-5s %-14s %s\n" "$mark" "$cc" "$(cc_name "$cc")" "${pct}%"
+      printf "%s%s %s %s\n" \
+        "$mark" \
+        "$(color WHT "$(printf '%-5s' "$cc")")" \
+        "$(color BLU "$(printf '%-14s' "$(cc_name "$cc")")")" \
+        "$(color WHT "${pct}%")"
     done <<<"$leg"
   fi
-  printf "\n%s\n" "$(color DIM "green = consensus, yellow = other")"
+  printf "\n%s\n" "$(color DIM "green = itog, yellow = other")"
 }
 
 print_json() {
